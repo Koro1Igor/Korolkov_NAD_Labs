@@ -1,0 +1,29 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: orbit-lab2-postgres
+    environment:
+      POSTGRES_DB: orbitlab
+      POSTGRES_USER: orbit
+      POSTGRES_PASSWORD: orbit12345
+    ports:
+      - "5433:5432"
+    volumes:
+      - orbit-lab2-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U orbit -d orbitlab"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  adminer:
+    image: adminer:latest
+    container_name: orbit-lab2-adminer
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8081:8080"
+
+volumes:
+  orbit-lab2-postgres-data:

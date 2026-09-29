@@ -1,158 +1,245 @@
 package repository
 
-import "fmt"
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+	"os"
+	"time"
 
-const minioBaseURL = "http://localhost:9000/service-media"
+	"orbitlab/internal/app/model"
 
-type LaunchVehicle struct {
-	ID               int
-	Name             string
-	Status           string
-	PayloadKg        int
-	SeaLevelThrustKN int
-	Description      string
-	ImageURL         string
-	VideoURL         string
-	Likes            []int
-}
+	"gorm.io/driver/postgres"
+	"gorm.io/gorm"
+)
+
+var ErrDraftNotFound = errors.New("черновик launch vehicle не найден")
 
 type Repository struct {
-	launchVehicles []LaunchVehicle
+	db    *gorm.DB
+	sqlDB *sql.DB
 }
 
 func NewRepository() (*Repository, error) {
-	launchVehicles := []LaunchVehicle{
-		{
-			ID:               1,
-			Name:             "Falcon 9",
-			Status:           "published",
-			PayloadKg:        8300,
-			SeaLevelThrustKN: 7607,
-			Description:      "Falcon 9 — ракета-носитель SpaceX. Максимальная полезная нагрузка на геопереходную орбиту — 8 300 кг.",
-			ImageURL:         minioBaseURL + "/images/falcon9.jpeg",
-			VideoURL:         minioBaseURL + "/videos/falcon9_launch.mp4",
-			Likes:            []int{2, 5, 7, 11, 18, 21, 35, 41},
-		},
-		{
-			ID:               2,
-			Name:             "Falcon Heavy",
-			Status:           "published",
-			PayloadKg:        26700,
-			SeaLevelThrustKN: 22819,
-			Description:      "Falcon Heavy — тяжёлая ракета-носитель SpaceX. Максимальная полезная нагрузка на геопереходную орбиту — 26 700 кг.",
-			ImageURL:         minioBaseURL + "/images/falcon_heavy.jpeg",
-			VideoURL:         minioBaseURL + "/videos/falcon_heavy_launch.mp4",
-			Likes:            []int{1, 2, 3, 4, 7, 8, 10, 12, 14, 17, 19, 22},
-		},
-		{
-			ID:               3,
-			Name:             "Ariane 64",
-			Status:           "published",
-			PayloadKg:        11500,
-			SeaLevelThrustKN: 1370,
-			Description:      "Ariane 64 — четырёхбустерная конфигурация Ariane 6. Максимальная полезная нагрузка на стандартную геопереходную орбиту — 11 500 кг.",
-			ImageURL:         minioBaseURL + "/images/ariane64.jpeg",
-			VideoURL:         minioBaseURL + "/videos/ariane64_launch.mp4",
-			Likes:            []int{3, 6, 9, 12, 15, 18},
-		},
-		{
-			ID:               4,
-			Name:             "Soyuz MS16",
-			Status:           "draft",
-			PayloadKg:        4500,
-			SeaLevelThrustKN: 1370,
-			Description:      "Союз МС-16 — пилотируемый космический корабль серии „Союз МС“, предназначенный для доставки экипажа на Международную космическую станцию и возвращения его на Землю.",
-			ImageURL:         minioBaseURL + "/images/soyuz_ms16.jpeg",
-			VideoURL:         minioBaseURL + "/videos/soyuz_ms16_launch.mp4",
-			Likes:            []int{},
-		},
-		{
-			ID:               5,
-			Name:             "Souyz MS12",
-			Status:           "deleted",
-			PayloadKg:        8300,
-			SeaLevelThrustKN: 7607,
-			Description:      "Удалённая запись ракеты-носителя. Она остаётся в коллекции, но не отображается в интерфейсе.",
-			ImageURL:         minioBaseURL + "/images/souyz_ms12_archive.jpeg",
-			VideoURL:         minioBaseURL + "/videos/souyz_ms12_launch_archive.mp4",
-			Likes:            []int{1},
-		},
-	}
+	dsn := fmt.Sprintf(
+		"host=%s user=%s password=%s dbname=%s port=%s sslmode=disable TimeZone=Europe/Moscow",
+		getEnv("PGHOST", "localhost"),
+		getEnv("PGUSER", "orbit"),
+		getEnv("PGPASSWORD", "orbit12345"),
+		getEnv("PGDATABASE", "orbitlab"),
+		getEnv("PGPORT", "5432"),
+	)
 
-	if len(launchVehicles) == 0 {
-		return nil, fmt.Errorf("коллекция launch vehicles пуста")
-	}
-
-	return &Repository{launchVehicles: launchVehicles}, nil
-}
-
-func (r *Repository) GetPublishedLaunchVehicles() ([]LaunchVehicle, error) {
-	result := make([]LaunchVehicle, 0)
-	for _, launchVehicle := range r.launchVehicles {
-		if launchVehicle.Status == "published" {
-			result = append(result, launchVehicle)
-		}
-	}
-	if len(result) == 0 {
-		return nil, fmt.Errorf("опубликованные launch vehicles не найдены")
-	}
-	return result, nil
-}
-
-func (r *Repository) GetLaunchVehicleByID(id int) (LaunchVehicle, error) {
-	launchVehicles, err := r.GetPublishedLaunchVehicles()
+	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
 	if err != nil {
-		return LaunchVehicle{}, err
+		return nil, fmt.Errorf("ошибка подключения к PostgreSQL: %w", err)
 	}
-	for _, launchVehicle := range launchVehicles {
-		if launchVehicle.ID == id {
-			return launchVehicle, nil
-		}
-	}
-	return LaunchVehicle{}, fmt.Errorf("launch vehicle с id=%d не найден", id)
-}
 
-func (r *Repository) GetFirstPublishedLaunchVehicle() (LaunchVehicle, error) {
-	launchVehicles, err := r.GetPublishedLaunchVehicles()
+	if err := db.AutoMigrate(
+		&model.User{},
+		&model.LaunchVehicle{},
+		&model.Like{},
+	); err != nil {
+		return nil, fmt.Errorf("ошибка миграции: %w", err)
+	}
+
+	if err := db.Exec(`
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_one_draft_per_creator
+		ON launch_vehicles (creator_id)
+		WHERE status = 'draft'
+	`).Error; err != nil {
+		return nil, fmt.Errorf("ошибка создания ограничения на draft: %w", err)
+	}
+
+	sqlDB, err := db.DB()
 	if err != nil {
-		return LaunchVehicle{}, err
+		return nil, fmt.Errorf("ошибка получения database/sql: %w", err)
 	}
-	return launchVehicles[0], nil
+
+	return &Repository{
+		db:    db,
+		sqlDB: sqlDB,
+	}, nil
 }
 
-func (r *Repository) GetNextPublishedLaunchVehicle(id int) (LaunchVehicle, error) {
-	launchVehicles, err := r.GetPublishedLaunchVehicles()
+func getEnv(key, defaultValue string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
+	}
+	return defaultValue
+}
+
+func (r *Repository) GetFeedLaunchVehicle(id *uint, next bool) (model.LaunchVehicle, error) {
+	var launchVehicle model.LaunchVehicle
+
+	query := r.db.
+		Model(&model.LaunchVehicle{}).
+		Preload("Likes").
+		Where("status = ?", model.StatusPublished)
+
+	if id == nil {
+		err := query.
+			Order("id ASC").
+			Limit(1).
+			First(&launchVehicle).Error
+		return launchVehicle, err
+	}
+
+	if !next {
+		err := query.
+			Where("id = ?", *id).
+			Limit(1).
+			First(&launchVehicle).Error
+		return launchVehicle, err
+	}
+
+	err := query.
+		Where("id > ?", *id).
+		Order("id ASC").
+		Limit(1).
+		First(&launchVehicle).Error
+
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		err = r.db.
+			Model(&model.LaunchVehicle{}).
+			Preload("Likes").
+			Where("status = ?", model.StatusPublished).
+			Order("id ASC").
+			Limit(1).
+			First(&launchVehicle).Error
+	}
+
+	return launchVehicle, err
+}
+
+func (r *Repository) GetDraftByCreator(creatorID uint) (model.LaunchVehicle, error) {
+	var launchVehicle model.LaunchVehicle
+
+	err := r.db.
+		Where(
+			"creator_id = ? AND status = ?",
+			creatorID,
+			model.StatusDraft,
+		).
+		Limit(1).
+		First(&launchVehicle).Error
+
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return launchVehicle, ErrDraftNotFound
+	}
+
+	return launchVehicle, err
+}
+
+func (r *Repository) GetPublishedLaunchVehicles(
+	minPayload,
+	maxPayload int,
+) ([]model.LaunchVehicle, error) {
+	var launchVehicles []model.LaunchVehicle
+
+	err := r.db.
+		Preload("Likes").
+		Where(
+			"status = ? AND payload_kg BETWEEN ? AND ?",
+			model.StatusPublished,
+			minPayload,
+			maxPayload,
+		).
+		Order("id ASC").
+		Find(&launchVehicles).Error
+
+	return launchVehicles, err
+}
+
+func (r *Repository) CreateDraft(
+	creatorID uint,
+	name string,
+) (model.LaunchVehicle, error) {
+	existing, err := r.GetDraftByCreator(creatorID)
+	if err == nil {
+		return existing, nil
+	}
+	if !errors.Is(err, ErrDraftNotFound) {
+		return model.LaunchVehicle{}, err
+	}
+
+	launchVehicle := model.LaunchVehicle{
+		Name:      name,
+		Status:    model.StatusDraft,
+		ImageURL:  "",
+		VideoURL:  "",
+		CreatorID: creatorID,
+	}
+
+	if err := r.db.Create(&launchVehicle).Error; err != nil {
+		return model.LaunchVehicle{}, err
+	}
+
+	return launchVehicle, nil
+}
+
+// PublishDraft — ORM.
+func (r *Repository) PublishDraft(
+	creatorID uint,
+	id uint,
+	shortDescription string,
+	payloadKg int,
+	seaLevelThrustKN int,
+) error {
+	formedAt := time.Now()
+
+	result := r.db.
+		Model(&model.LaunchVehicle{}).
+		Where(
+			"id = ? AND creator_id = ? AND status = ?",
+			id,
+			creatorID,
+			model.StatusDraft,
+		).
+		Updates(map[string]any{
+			"short_description":   shortDescription,
+			"payload_kg":          payloadKg,
+			"sea_level_thrust_kn": seaLevelThrustKN,
+			"status":              model.StatusPublished,
+			"formed_at":           &formedAt,
+		})
+
+	if result.Error != nil {
+		return result.Error
+	}
+
+	if result.RowsAffected == 0 {
+		return ErrDraftNotFound
+	}
+
+	return nil
+}
+
+func (r *Repository) DeleteLaunchVehicleRaw(
+	ctx context.Context,
+	id uint,
+) error {
+	result, err := r.sqlDB.ExecContext(
+		ctx,
+		`UPDATE launch_vehicles
+		 SET status = $1
+		 WHERE id = $2 AND status <> $1`,
+		model.StatusDeleted,
+		id,
+	)
 	if err != nil {
-		return LaunchVehicle{}, err
+		return err
 	}
-	for i, launchVehicle := range launchVehicles {
-		if launchVehicle.ID == id {
-			return launchVehicles[(i+1)%len(launchVehicles)], nil
-		}
-	}
-	return LaunchVehicle{}, fmt.Errorf("launch vehicle с id=%d не найден", id)
-}
 
-func (r *Repository) GetDraftLaunchVehicle() (LaunchVehicle, error) {
-	for _, launchVehicle := range r.launchVehicles {
-		if launchVehicle.Status == "draft" {
-			return launchVehicle, nil
-		}
-	}
-	return LaunchVehicle{}, fmt.Errorf("черновик launch vehicle не найден")
-}
-
-func (r *Repository) GetFilteredLaunchVehicles(minPayload, maxPayload int) ([]LaunchVehicle, error) {
-	launchVehicles, err := r.GetPublishedLaunchVehicles()
+	rowsAffected, err := result.RowsAffected()
 	if err != nil {
-		return nil, err
+		return err
 	}
 
-	result := make([]LaunchVehicle, 0)
-	for _, launchVehicle := range launchVehicles {
-		if launchVehicle.PayloadKg >= minPayload && launchVehicle.PayloadKg <= maxPayload {
-			result = append(result, launchVehicle)
-		}
+	if rowsAffected == 0 {
+		return gorm.ErrRecordNotFound
 	}
-	return result, nil
+
+	return nil
 }

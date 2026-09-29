@@ -10,36 +10,52 @@
 <main class="phone standard-page">
   <header class="page-header">
     <h1>ДОБАВЛЕНИЕ</h1>
-    <span class="badge">ЧЕРНОВИК</span>
+    {{ if .hasDraft }}<span class="badge">ЧЕРНОВИК</span>{{ end }}
   </header>
 
-  <form class="edit-form">
-    <label>ИЗОБРАЖЕНИЕ
-      <input type="file" accept="image/*">
-    </label>
+  {{ if .hasDraft }}
+  <form class="edit-form" method="post" action="/launch-vehicles/publish">
+    <input type="hidden" name="id" value="{{ .launchVehicle.ID }}">
 
-    <label>ВИДЕО
-      <input type="file" accept="video/*">
-    </label>
+    <div class="draft-preview"><img src="{{ .launchVehicle.ImageURL }}" alt="{{ .launchVehicle.Name }}"></div>
 
     <label>НАЗВАНИЕ LAUNCH VEHICLE
-      <input type="text" value="{{ .launchVehicle.Name }}">
+      <input type="text" value="{{ .launchVehicle.Name }}" disabled>
+    </label>
+
+    <label>КРАТКАЯ ИНФОРМАЦИЯ
+      <textarea name="short_description" rows="5" required>{{ .launchVehicle.ShortDescription }}</textarea>
     </label>
 
     <label>ПОЛЕЗНАЯ НАГРУЗКА, КГ
-      <input type="number" min="0" value="{{ .launchVehicle.PayloadKg }}">
+      <input name="payload_kg" type="number" min="0" value="{{ .launchVehicle.PayloadKg }}" required>
     </label>
 
     <label>ТЯГА НА УРОВНЕ МОРЯ, КН
-      <input type="number" min="0" value="{{ .launchVehicle.SeaLevelThrustKN }}">
+      <input name="sea_level_thrust_kn" type="number" min="0" value="{{ .launchVehicle.SeaLevelThrustKN }}" required>
     </label>
 
-    <label>ОПИСАНИЕ
-      <textarea rows="5">{{ .launchVehicle.Description }}</textarea>
-    </label>
-
-    <button class="next-button" type="button">ДАЛЕЕ</button>
+    <button class="primary-button" type="submit">ОПУБЛИКОВАТЬ</button>
   </form>
+  {{ else }}
+  <form class="edit-form" method="post" action="/launch-vehicles/create">
+    <label>ИЗОБРАЖЕНИЕ
+      <input type="file" accept="image/*" required>
+      <span class="hint">В ЛР2 файл выбирается в интерфейсе, но на сервер не отправляется.</span>
+    </label>
+
+    <label>ВИДЕО
+      <input type="file" accept="video/*" required>
+      <span class="hint">Для новой карточки используется медиа по умолчанию.</span>
+    </label>
+
+    <label>НАЗВАНИЕ LAUNCH VEHICLE
+      <input name="name" type="text" required>
+    </label>
+
+    <button class="primary-button" type="submit">ДАЛЕЕ</button>
+  </form>
+  {{ end }}
 
   <nav class="bottom-nav">
     <a class="nav-link" href="/feed"><span class="nav-icon">▤</span><span>Лента</span></a>

@@ -14,9 +14,7 @@
     </video>
     <div class="shade"></div>
 
-    <header class="reel-top">
-      <div class="wordmark">ЛЕНТА</div>
-    </header>
+    <header class="reel-top"><div class="wordmark">ЛЕНТА</div></header>
 
     <aside class="reel-side">
       <div class="fact"><b>{{ .launchVehicle.PayloadKg }}</b><span>полезная нагрузка, кг</span></div>
@@ -29,7 +27,7 @@
       <h1>{{ .launchVehicle.Name }}</h1>
       <details class="description-details">
         <summary><span class="more-label">Больше</span><span class="less-label">Меньше</span></summary>
-        <p>{{ .launchVehicle.Description }}</p>
+        <p>{{ .launchVehicle.ShortDescription }}</p>
       </details>
     </div>
   </section>
