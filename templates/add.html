@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Добавление — Orbita</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+<main class="phone standard-page">
+  <header class="page-header">
+    <h1>ДОБАВЛЕНИЕ</h1>
+    <span class="badge">ЧЕРНОВИК</span>
+  </header>
+
+  <form class="edit-form">
+    <div class="section-label">МЕДИАФАЙЛЫ</div>
+
+    <div class="draft-preview">
+      <img src="{{ .service.ImageURL }}" alt="{{ .service.Name }}">
+    </div>
+
+    <label>ИЗОБРАЖЕНИЕ
+      <input type="text" value="{{ .service.ImageURL }}">
+    </label>
+
+    <label>ВИДЕО
+      <input type="text" value="{{ .service.VideoURL }}">
+    </label>
+
+    <p class="hint">Изображение и видео хранятся в MinIO.</p>
+
+    <label>НАЗВАНИЕ УСЛУГИ
+      <input type="text" value="{{ .service.Name }}">
+    </label>
+
+    <label>ШИРОТА КОСМОДРОМА
+      <input type="number" step="0.01" value="{{ .service.Latitude }}">
+    </label>
+
+    <label>МАКС. ПОЛЕЗНАЯ НАГРУЗКА, КГ
+      <input type="number" value="{{ .service.MaxPayloadKg }}">
+    </label>
+
+    <label>ОПИСАНИЕ
+      <textarea rows="5">{{ .service.Description }}</textarea>
+    </label>
+
+    <button class="disabled" type="button" disabled>СОХРАНЕНИЕ НЕДОСТУПНО В ЛР1</button>
+  </form>
+
+  <nav class="bottom-nav">
+    <a class="nav-link" href="/feed"><span class="nav-icon">▤</span><span>Лента</span></a>
+    <a class="nav-link active" href="/add"><span class="nav-icon">⊞</span><span>Добавление</span></a>
+    <a class="nav-link" href="/services"><span class="nav-icon">▦</span><span>Плитка</span></a>
+  </nav>
+</main>
+</body>
+</html>
