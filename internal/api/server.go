@@ -26,7 +26,7 @@ func StartServer() {
 
 	r.GET("/feed", h.GetFeed)
 	r.GET("/add", h.GetDraft)
-	r.GET("/services", h.GetServices)
+	r.GET("/launch-vehicles", h.GetLaunchVehicles)
 
 	if err := r.Run(":8080"); err != nil {
 		logrus.Fatal(err)

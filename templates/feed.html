@@ -3,14 +3,14 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Лента — Orbita</title>
+  <title>Лента — Launch Vehicle</title>
   <link rel="stylesheet" href="/static/css/style.css">
 </head>
 <body>
 <main class="phone">
   <section class="reel">
-    <video class="reel-video" autoplay muted loop playsinline poster="{{ .service.ImageURL }}">
-      <source src="{{ .service.VideoURL }}" type="video/mp4">
+    <video class="reel-video" autoplay muted loop playsinline poster="{{ .launchVehicle.ImageURL }}">
+      <source src="{{ .launchVehicle.VideoURL }}" type="video/mp4">
     </video>
     <div class="shade"></div>
 
@@ -19,18 +19,17 @@
     </header>
 
     <aside class="reel-side">
-      <div class="fact"><b>{{ printf "%.2f" .service.Latitude }}°</b><span>широта</span></div>
-      <div class="fact"><b>{{ .service.MaxPayloadKg }}</b><span>кг GTO</span></div>
+      <div class="fact"><b>{{ .launchVehicle.PayloadKg }}</b><span>полезная нагрузка, кг</span></div>
+      <div class="fact"><b>{{ .launchVehicle.SeaLevelThrustKN }}</b><span>тяга у моря, кН</span></div>
       <div class="side-action"><span class="heart">♡</span><b>{{ .likeCount }}</b></div>
-      <a class="next-round" href="/feed?id={{ .service.ID }}&next=true" aria-label="Следующий">→</a>
+      <a class="next-round" href="/feed?id={{ .launchVehicle.ID }}&next=true" aria-label="Следующий">→</a>
     </aside>
 
     <div class="reel-copy">
-      <div class="badge">ОПУБЛИКОВАН</div>
-      <h1>{{ .service.Name }}</h1>
-      <details>
-        <summary>Описание · <span>больше/меньше</span></summary>
-        <p>{{ .service.Description }}</p>
+      <h1>{{ .launchVehicle.Name }}</h1>
+      <details class="description-details">
+        <summary><span class="more-label">Больше</span><span class="less-label">Меньше</span></summary>
+        <p>{{ .launchVehicle.Description }}</p>
       </details>
     </div>
   </section>
@@ -38,7 +37,7 @@
   <nav class="bottom-nav">
     <a class="nav-link active" href="/feed"><span class="nav-icon">▤</span><span>Лента</span></a>
     <a class="nav-link" href="/add"><span class="nav-icon">⊞</span><span>Добавление</span></a>
-    <a class="nav-link" href="/services"><span class="nav-icon">▦</span><span>Плитка</span></a>
+    <a class="nav-link" href="/launch-vehicles"><span class="nav-icon">▦</span><span>Плитка</span></a>
   </nav>
 </main>
 </body>

@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Плитка — Launch Vehicle</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+<main class="phone standard-page">
+  <header class="page-header">
+    <h1>ПЛИТКА</h1>
+  </header>
+
+  <form class="filter-form" method="get" action="/launch-vehicles">
+    <div class="range-title">ПОЛЕЗНАЯ НАГРУЗКА, КГ</div>
+
+    <label for="payload_min">ОТ: <strong>{{ .minPayload }} КГ</strong></label>
+    <input id="payload_min" class="range-input" type="range" min="0" max="30000" step="100" name="payload_min" value="{{ .minPayload }}">
+
+    <label for="payload_max">ДО: <strong>{{ .maxPayload }} КГ</strong></label>
+    <input id="payload_max" class="range-input" type="range" min="0" max="30000" step="100" name="payload_max" value="{{ .maxPayload }}">
+
+    <button class="filter-button" type="submit">ПРИМЕНИТЬ</button>
+  </form>
+
+  <section class="card-grid">
+    {{ range .launchVehicles }}
+    <a class="launch-vehicle-card" href="/feed?id={{ .ID }}">
+      <img src="{{ .ImageURL }}" alt="{{ .Name }}">
+      <div class="card-content">
+        <h2>{{ .Name }}</h2>
+        <div class="sub">Тяга у моря: {{ .SeaLevelThrustKN }} кН</div>
+        <strong>{{ .PayloadKg }} кг</strong>
+        <div class="card-meta">
+          <span>♡ {{ index $.likeCounts .ID }}</span>
+          <span>ID {{ .ID }}</span>
+        </div>
+      </div>
+    </a>
+    {{ else }}
+    <p class="empty">В выбранном диапазоне launch vehicles нет.</p>
+    {{ end }}
+  </section>
+
+  <nav class="bottom-nav">
+    <a class="nav-link" href="/feed"><span class="nav-icon">▤</span><span>Лента</span></a>
+    <a class="nav-link" href="/add"><span class="nav-icon">⊞</span><span>Добавление</span></a>
+    <a class="nav-link active" href="/launch-vehicles"><span class="nav-icon">▦</span><span>Плитка</span></a>
+  </nav>
+</main>
+</body>
+</html>
