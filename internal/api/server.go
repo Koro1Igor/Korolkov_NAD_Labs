@@ -28,7 +28,7 @@ func StartServer() {
 	r.GET("/add", h.GetDraft)
 	r.GET("/launch-vehicles", h.GetLaunchVehicles)
 
-	if err := r.Run(":8080"); err != nil {
+	if err := r.Run(":8082"); err != nil {
 		logrus.Fatal(err)
 	}
 }
