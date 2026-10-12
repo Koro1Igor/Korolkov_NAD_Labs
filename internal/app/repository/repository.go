@@ -179,7 +179,6 @@ func (r *Repository) CreateDraft(
 	return launchVehicle, nil
 }
 
-// PublishDraft — ORM.
 func (r *Repository) PublishDraft(
 	creatorID uint,
 	id uint,

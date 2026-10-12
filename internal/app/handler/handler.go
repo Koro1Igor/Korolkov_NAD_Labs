@@ -146,6 +146,8 @@ func (h *Handler) GetLaunchVehicles(ctx *gin.Context) {
 	})
 }
 
+// PostCreateDraft выполняется через ORM.
+// Черновик создается только после нажатия кнопки "Далее".
 func (h *Handler) PostCreateDraft(ctx *gin.Context) {
 	name := strings.TrimSpace(ctx.PostForm("name"))
 
@@ -164,6 +166,8 @@ func (h *Handler) PostCreateDraft(ctx *gin.Context) {
 	ctx.Redirect(http.StatusSeeOther, "/add")
 }
 
+// PostPublishDraft выполняется через ORM.
+// Сохраняет обязательные для публикации поля и публикует черновик.
 func (h *Handler) PostPublishDraft(ctx *gin.Context) {
 	id, err := parseUint(ctx.PostForm("id"))
 	if err != nil {
@@ -171,13 +175,13 @@ func (h *Handler) PostPublishDraft(ctx *gin.Context) {
 		return
 	}
 
-	payloadKg, err := strconv.Atoi(ctx.PostForm("payload_kg"))
+	payloadKg, err := strconv.Atoi(strings.TrimSpace(ctx.PostForm("payload_kg")))
 	if err != nil || payloadKg < 0 {
 		ctx.String(http.StatusBadRequest, "некорректная полезная нагрузка")
 		return
 	}
 
-	seaLevelThrustKN, err := strconv.Atoi(ctx.PostForm("sea_level_thrust_kn"))
+	seaLevelThrustKN, err := strconv.Atoi(strings.TrimSpace(ctx.PostForm("sea_level_thrust_kn")))
 	if err != nil || seaLevelThrustKN < 0 {
 		ctx.String(http.StatusBadRequest, "некорректная тяга на уровне моря")
 		return
@@ -185,7 +189,7 @@ func (h *Handler) PostPublishDraft(ctx *gin.Context) {
 
 	shortDescription := strings.TrimSpace(ctx.PostForm("short_description"))
 	if shortDescription == "" {
-		ctx.String(http.StatusBadRequest, "краткая информация обязательна")
+		ctx.String(http.StatusBadRequest, "краткая информация обязательна для публикации")
 		return
 	}
 
@@ -209,6 +213,8 @@ func (h *Handler) PostPublishDraft(ctx *gin.Context) {
 	ctx.Redirect(http.StatusSeeOther, "/launch-vehicles")
 }
 
+// PostDeleteLaunchVehicle — единственный контроллер ЛР2, который меняет услугу
+// не через ORM, а прямым SQL UPDATE через database/sql.
 func (h *Handler) PostDeleteLaunchVehicle(ctx *gin.Context) {
 	id, err := parseUint(ctx.PostForm("id"))
 	if err != nil {
@@ -239,27 +245,33 @@ func parseUint(raw string) (uint, error) {
 }
 
 func (h *Handler) withMediaFallback(launchVehicle model.LaunchVehicle) model.LaunchVehicle {
-	launchVehicle.ImageURL = h.resolveMedia(launchVehicle.ImageURL, defaultImageURL)
-	launchVehicle.VideoURL = h.resolveMedia(launchVehicle.VideoURL, defaultVideoURL)
+	imageURL := h.resolveMedia(launchVehicle.ImageURL, defaultImageURL)
+	videoURL := h.resolveMedia(launchVehicle.VideoURL, defaultVideoURL)
+	launchVehicle.ImageURL = &imageURL
+	launchVehicle.VideoURL = &videoURL
 	return launchVehicle
 }
 
-func (h *Handler) resolveMedia(rawURL, fallback string) string {
-	rawURL = strings.TrimSpace(rawURL)
-
-	if rawURL == "" {
+func (h *Handler) resolveMedia(rawURL *string, fallback string) string {
+	if rawURL == nil {
 		return fallback
 	}
 
-	if strings.HasPrefix(rawURL, "/static/") {
-		return rawURL
-	}
+	value := strings.TrimSpace(*rawURL)
 
-	if !strings.HasPrefix(rawURL, "http://") && !strings.HasPrefix(rawURL, "https://") {
+	if value == "" {
 		return fallback
 	}
 
-	request, err := http.NewRequest(http.MethodHead, rawURL, nil)
+	if strings.HasPrefix(value, "/static/") {
+		return value
+	}
+
+	if !strings.HasPrefix(value, "http://") && !strings.HasPrefix(value, "https://") {
+		return fallback
+	}
+
+	request, err := http.NewRequest(http.MethodHead, value, nil)
 	if err != nil {
 		return fallback
 	}
@@ -274,5 +286,5 @@ func (h *Handler) resolveMedia(rawURL, fallback string) string {
 		return fallback
 	}
 
-	return rawURL
+	return value
 }

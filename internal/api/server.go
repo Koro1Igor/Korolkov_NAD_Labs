@@ -24,6 +24,7 @@ func StartServer() {
 	r.LoadHTMLGlob("templates/*")
 	r.Static("/static", "./resources")
 
+	// Ровно 6 HTTP-методов по заданию ЛР2.
 	r.GET("/feed", h.GetFeed)
 	r.GET("/add", h.GetDraft)
 	r.GET("/launch-vehicles", h.GetLaunchVehicles)
