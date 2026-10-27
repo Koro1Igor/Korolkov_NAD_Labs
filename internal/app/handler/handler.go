@@ -1,290 +1,369 @@
 package handler
 
 import (
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
+	"mime"
 	"net/http"
+	"net/mail"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
 	"orbitlab/internal/app/model"
 	"orbitlab/internal/app/repository"
+	"orbitlab/internal/app/serializer"
 
 	"github.com/gin-gonic/gin"
-	"github.com/sirupsen/logrus"
-	"gorm.io/gorm"
 )
 
 const (
-	currentUserID     uint = 1
-	defaultMinPayload      = 0
-	defaultMaxPayload      = 30000
-	defaultImageURL        = "/static/defaults/default-launch-vehicle.png"
-	defaultVideoURL        = "/static/defaults/default-launch-vehicle.mp4"
+	defaultMinPayload = 0
+	defaultMaxPayload = 30000
+	maxImageSize      = 10 * 1024 * 1024
+	maxVideoSize      = 60 * 1024 * 1024
 )
 
 type Handler struct {
-	Repository *repository.Repository
-	httpClient *http.Client
+	repository *repository.Repository
+	storage    *repository.ObjectStorage
 }
 
-func NewHandler(r *repository.Repository) *Handler {
-	return &Handler{
-		Repository: r,
-		httpClient: &http.Client{Timeout: 700 * time.Millisecond},
+func NewHandler(repo *repository.Repository, storage *repository.ObjectStorage) *Handler {
+	return &Handler{repository: repo, storage: storage}
+}
+
+func (h *Handler) GetLaunchVehicles(ctx *gin.Context) {
+	minPayload, err := queryInt(ctx, "payload_min", defaultMinPayload)
+	if err != nil {
+		writeError(ctx, http.StatusBadRequest, "invalid payload_min")
+		return
 	}
+	maxPayload, err := queryInt(ctx, "payload_max", defaultMaxPayload)
+	if err != nil || minPayload > maxPayload {
+		writeError(ctx, http.StatusBadRequest, "invalid payload_max")
+		return
+	}
+	userID := model.CurrentCreatorID()
+	items, err := h.repository.ListPublished(ctx.Request.Context(), minPayload, maxPayload)
+	if err != nil {
+		handleError(ctx, err)
+		return
+	}
+	result := make([]serializer.LaunchVehicleListItem, 0, len(items))
+	for _, item := range items {
+		result = append(result, serializer.ListItem(item, userID, h.storage.Endpoint(), h.storage.Bucket()))
+	}
+	ctx.JSON(http.StatusOK, gin.H{"items": result})
 }
 
 func (h *Handler) GetFeed(ctx *gin.Context) {
 	var id *uint
-
-	idString := strings.TrimSpace(ctx.Query("id"))
-	if idString != "" {
-		parsed, err := strconv.ParseUint(idString, 10, 64)
-		if err != nil || parsed == 0 {
-			ctx.String(http.StatusBadRequest, "некорректный id")
+	if raw := strings.TrimSpace(ctx.Query("id")); raw != "" {
+		value, err := parseUint(raw)
+		if err != nil {
+			writeError(ctx, http.StatusBadRequest, "invalid id")
 			return
 		}
-		value := uint(parsed)
 		id = &value
 	}
-
-	next := ctx.Query("next") == "true"
-
-	launchVehicle, err := h.Repository.GetFeedLaunchVehicle(id, next)
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		ctx.String(http.StatusNotFound, "launch vehicle не найден или удален")
+	next := false
+	if raw := strings.TrimSpace(ctx.Query("next")); raw != "" {
+		value, err := strconv.ParseBool(raw)
+		if err != nil {
+			writeError(ctx, http.StatusBadRequest, "invalid next")
+			return
+		}
+		next = value
+	}
+	if next && id == nil {
+		writeError(ctx, http.StatusBadRequest, "id is required when next=true")
 		return
 	}
+	userID := model.CurrentCreatorID()
+	item, err := h.repository.Feed(ctx.Request.Context(), id, next)
 	if err != nil {
-		logrus.Error(err)
-		ctx.String(http.StatusInternalServerError, err.Error())
+		handleError(ctx, err)
 		return
 	}
-
-	launchVehicle = h.withMediaFallback(launchVehicle)
-
-	ctx.HTML(http.StatusOK, "feed.html", gin.H{
-		"launchVehicle": launchVehicle,
-		"likeCount":     len(launchVehicle.Likes),
-	})
+	ctx.JSON(http.StatusOK, serializer.FeedItem(item, userID, h.storage.Endpoint(), h.storage.Bucket()))
 }
 
 func (h *Handler) GetDraft(ctx *gin.Context) {
-	launchVehicle, err := h.Repository.GetDraftByCreator(currentUserID)
-
-	if errors.Is(err, repository.ErrDraftNotFound) {
-		ctx.HTML(http.StatusOK, "add.html", gin.H{
-			"hasDraft": false,
-		})
-		return
-	}
-
+	item, err := h.repository.DraftByCreator(ctx.Request.Context(), model.CurrentCreatorID())
 	if err != nil {
-		logrus.Error(err)
-		ctx.String(http.StatusInternalServerError, err.Error())
+		handleError(ctx, err)
 		return
 	}
-
-	launchVehicle = h.withMediaFallback(launchVehicle)
-
-	ctx.HTML(http.StatusOK, "add.html", gin.H{
-		"hasDraft":      true,
-		"launchVehicle": launchVehicle,
-	})
+	ctx.JSON(http.StatusOK, serializer.Detail(item, h.storage.Endpoint(), h.storage.Bucket()))
 }
 
-func (h *Handler) GetLaunchVehicles(ctx *gin.Context) {
-	minPayloadString := ctx.Query("payload_min")
-	maxPayloadString := ctx.Query("payload_max")
-
-	minPayload := defaultMinPayload
-	maxPayload := defaultMaxPayload
-
-	if minPayloadString != "" {
-		parsed, err := strconv.Atoi(minPayloadString)
-		if err != nil || parsed < 0 {
-			ctx.String(http.StatusBadRequest, "payload_min должен быть неотрицательным целым числом")
-			return
-		}
-		minPayload = parsed
-	}
-
-	if maxPayloadString != "" {
-		parsed, err := strconv.Atoi(maxPayloadString)
-		if err != nil || parsed < 0 {
-			ctx.String(http.StatusBadRequest, "payload_max должен быть неотрицательным целым числом")
-			return
-		}
-		maxPayload = parsed
-	}
-
-	if minPayload > maxPayload {
-		ctx.String(http.StatusBadRequest, "payload_min не может быть больше payload_max")
+func (h *Handler) CreateLaunchVehicle(ctx *gin.Context) {
+	if err := ctx.Request.ParseMultipartForm(maxVideoSize + maxImageSize + 1<<20); err != nil {
+		writeError(ctx, http.StatusBadRequest, "invalid multipart form")
 		return
 	}
-
-	launchVehicles, err := h.Repository.GetPublishedLaunchVehicles(minPayload, maxPayload)
-	if err != nil {
-		logrus.Error(err)
-		ctx.String(http.StatusInternalServerError, err.Error())
-		return
+	for field := range ctx.Request.MultipartForm.Value {
+		if field != "name" {
+			writeError(ctx, http.StatusBadRequest, "unknown or system field: "+field)
+			return
+		}
 	}
-
-	likeCounts := make(map[uint]int)
-
-	for i := range launchVehicles {
-		launchVehicles[i] = h.withMediaFallback(launchVehicles[i])
-		likeCounts[launchVehicles[i].ID] = len(launchVehicles[i].Likes)
+	for field := range ctx.Request.MultipartForm.File {
+		if field != "image" && field != "video" {
+			writeError(ctx, http.StatusBadRequest, "unknown file field: "+field)
+			return
+		}
 	}
-
-	ctx.HTML(http.StatusOK, "launch-vehicles.html", gin.H{
-		"launchVehicles": launchVehicles,
-		"likeCounts":     likeCounts,
-		"minPayload":     minPayload,
-		"maxPayload":     maxPayload,
-	})
-}
-
-// PostCreateDraft выполняется через ORM.
-// Черновик создается только после нажатия кнопки "Далее".
-func (h *Handler) PostCreateDraft(ctx *gin.Context) {
 	name := strings.TrimSpace(ctx.PostForm("name"))
-
-	if name == "" {
-		ctx.String(http.StatusBadRequest, "название обязательно")
+	if name == "" || len([]rune(name)) > 120 {
+		writeError(ctx, http.StatusBadRequest, "invalid name")
 		return
 	}
-
-	_, err := h.Repository.CreateDraft(currentUserID, name)
+	imageHeader, err := ctx.FormFile("image")
+	if err != nil || imageHeader.Size <= 0 || imageHeader.Size > maxImageSize {
+		writeError(ctx, http.StatusBadRequest, "invalid image file")
+		return
+	}
+	videoHeader, err := ctx.FormFile("video")
+	if err != nil || videoHeader.Size <= 0 || videoHeader.Size > maxVideoSize {
+		writeError(ctx, http.StatusBadRequest, "invalid video file")
+		return
+	}
+	imageExt := normalizedExtension(imageHeader.Filename, true)
+	videoExt := normalizedExtension(videoHeader.Filename, false)
+	if imageExt == "" || videoExt == "" {
+		writeError(ctx, http.StatusBadRequest, "unsupported media extension")
+		return
+	}
+	if _, err := h.repository.DraftByCreator(ctx.Request.Context(), model.CurrentCreatorID()); err == nil {
+		handleError(ctx, model.ErrDraftExists)
+		return
+	} else if !errors.Is(err, model.ErrDraftNotFound) {
+		handleError(ctx, err)
+		return
+	}
+	image, err := imageHeader.Open()
 	if err != nil {
-		logrus.Error(err)
-		ctx.String(http.StatusInternalServerError, err.Error())
+		writeError(ctx, http.StatusBadRequest, "cannot open image")
 		return
 	}
-
-	ctx.Redirect(http.StatusSeeOther, "/add")
+	defer image.Close()
+	video, err := videoHeader.Open()
+	if err != nil {
+		writeError(ctx, http.StatusBadRequest, "cannot open video")
+		return
+	}
+	defer video.Close()
+	imageName := generateObjectName("images", "image", imageExt)
+	videoName := generateObjectName("videos", "video", videoExt)
+	requestContext := ctx.Request.Context()
+	if err := h.storage.Upload(requestContext, imageName, contentType(imageHeader.Header.Get("Content-Type"), imageExt), image, imageHeader.Size); err != nil {
+		handleError(ctx, err)
+		return
+	}
+	if err := h.storage.Upload(requestContext, videoName, contentType(videoHeader.Header.Get("Content-Type"), videoExt), video, videoHeader.Size); err != nil {
+		_ = h.storage.Delete(requestContext, imageName)
+		handleError(ctx, err)
+		return
+	}
+	item, err := h.repository.CreateDraft(requestContext, model.CurrentCreatorID(), name, imageName, videoName)
+	if err != nil {
+		_ = h.storage.Delete(requestContext, imageName)
+		_ = h.storage.Delete(requestContext, videoName)
+		handleError(ctx, err)
+		return
+	}
+	ctx.JSON(http.StatusCreated, serializer.Detail(item, h.storage.Endpoint(), h.storage.Bucket()))
 }
 
-// PostPublishDraft выполняется через ORM.
-// Сохраняет обязательные для публикации поля и публикует черновик.
-func (h *Handler) PostPublishDraft(ctx *gin.Context) {
-	id, err := parseUint(ctx.PostForm("id"))
+func (h *Handler) PublishDraft(ctx *gin.Context) {
+	var input model.PublishLaunchVehicleInput
+	if err := decodeJSON(ctx, &input); err != nil {
+		writeError(ctx, http.StatusBadRequest, "invalid json")
+		return
+	}
+	input.ShortDescription = strings.TrimSpace(input.ShortDescription)
+	if input.ShortDescription == "" || len([]rune(input.ShortDescription)) > 500 || input.PayloadKg < 0 || input.SeaLevelThrustKN < 0 {
+		writeError(ctx, http.StatusBadRequest, "invalid input")
+		return
+	}
+	item, err := h.repository.PublishDraft(ctx.Request.Context(), model.CurrentCreatorID(), input)
 	if err != nil {
-		ctx.String(http.StatusBadRequest, "некорректный id")
+		handleError(ctx, err)
 		return
 	}
-
-	payloadKg, err := strconv.Atoi(strings.TrimSpace(ctx.PostForm("payload_kg")))
-	if err != nil || payloadKg < 0 {
-		ctx.String(http.StatusBadRequest, "некорректная полезная нагрузка")
-		return
-	}
-
-	seaLevelThrustKN, err := strconv.Atoi(strings.TrimSpace(ctx.PostForm("sea_level_thrust_kn")))
-	if err != nil || seaLevelThrustKN < 0 {
-		ctx.String(http.StatusBadRequest, "некорректная тяга на уровне моря")
-		return
-	}
-
-	shortDescription := strings.TrimSpace(ctx.PostForm("short_description"))
-	if shortDescription == "" {
-		ctx.String(http.StatusBadRequest, "краткая информация обязательна для публикации")
-		return
-	}
-
-	err = h.Repository.PublishDraft(
-		currentUserID,
-		id,
-		shortDescription,
-		payloadKg,
-		seaLevelThrustKN,
-	)
-	if errors.Is(err, repository.ErrDraftNotFound) {
-		ctx.String(http.StatusNotFound, "черновик не найден")
-		return
-	}
-	if err != nil {
-		logrus.Error(err)
-		ctx.String(http.StatusInternalServerError, err.Error())
-		return
-	}
-
-	ctx.Redirect(http.StatusSeeOther, "/launch-vehicles")
+	ctx.JSON(http.StatusOK, serializer.Detail(item, h.storage.Endpoint(), h.storage.Bucket()))
 }
 
-// PostDeleteLaunchVehicle — единственный контроллер ЛР2, который меняет услугу
-// не через ORM, а прямым SQL UPDATE через database/sql.
-func (h *Handler) PostDeleteLaunchVehicle(ctx *gin.Context) {
-	id, err := parseUint(ctx.PostForm("id"))
+func (h *Handler) DeleteLaunchVehicle(ctx *gin.Context) {
+	id, err := parseUint(ctx.Param("id"))
 	if err != nil {
-		ctx.String(http.StatusBadRequest, "некорректный id")
+		writeError(ctx, http.StatusBadRequest, "invalid id")
 		return
 	}
+	if err := h.repository.SoftDeleteOwn(ctx.Request.Context(), model.CurrentCreatorID(), id); err != nil {
+		handleError(ctx, err)
+		return
+	}
+	ctx.Status(http.StatusNoContent)
+}
 
-	err = h.Repository.DeleteLaunchVehicleRaw(ctx.Request.Context(), id)
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		ctx.String(http.StatusNotFound, "launch vehicle не найден")
-		return
-	}
+func (h *Handler) SetLike(ctx *gin.Context) {
+	id, err := parseUint(ctx.Param("id"))
 	if err != nil {
-		logrus.Error(err)
-		ctx.String(http.StatusInternalServerError, err.Error())
+		writeError(ctx, http.StatusBadRequest, "invalid id")
 		return
 	}
+	var input model.LikeInput
+	if err := decodeJSON(ctx, &input); err != nil || input.Value < 0 || input.Value > 1 {
+		writeError(ctx, http.StatusBadRequest, "value must be 0 or 1")
+		return
+	}
+	result, err := h.repository.SetLike(ctx.Request.Context(), model.CurrentCreatorID(), id, input.Value)
+	if err != nil {
+		handleError(ctx, err)
+		return
+	}
+	ctx.JSON(http.StatusOK, serializer.LikeResponse{ID: result.LaunchVehicleID, Liked: result.Liked, LikeCount: result.LikeCount})
+}
 
-	ctx.Redirect(http.StatusSeeOther, "/launch-vehicles")
+func (h *Handler) RegisterUser(ctx *gin.Context) {
+	var input model.RegisterUserInput
+	if err := decodeJSON(ctx, &input); err != nil {
+		writeError(ctx, http.StatusBadRequest, "invalid json")
+		return
+	}
+	input.Name = strings.TrimSpace(input.Name)
+	input.Email = strings.ToLower(strings.TrimSpace(input.Email))
+	input.Password = strings.TrimSpace(input.Password)
+	if input.Name == "" || len([]rune(input.Name)) > 100 || len(input.Password) < 4 || len(input.Password) > 255 {
+		writeError(ctx, http.StatusBadRequest, "invalid input")
+		return
+	}
+	if _, err := mail.ParseAddress(input.Email); err != nil {
+		writeError(ctx, http.StatusBadRequest, "invalid email")
+		return
+	}
+	user, err := h.repository.CreateUser(ctx.Request.Context(), input)
+	if err != nil {
+		handleError(ctx, err)
+		return
+	}
+	ctx.JSON(http.StatusCreated, serializer.User(user))
+}
+
+func (h *Handler) Login(ctx *gin.Context) {
+	var input model.LoginInput
+	if err := decodeJSON(ctx, &input); err != nil {
+		writeError(ctx, http.StatusBadRequest, "invalid json")
+		return
+	}
+	input.Email = strings.ToLower(strings.TrimSpace(input.Email))
+	input.Password = strings.TrimSpace(input.Password)
+	if input.Email == "" || input.Password == "" {
+		writeError(ctx, http.StatusBadRequest, "invalid input")
+		return
+	}
+	user, err := h.repository.Authenticate(ctx.Request.Context(), input.Email, input.Password)
+	if err != nil {
+		handleError(ctx, err)
+		return
+	}
+	ctx.JSON(http.StatusOK, gin.H{"authenticated": 1, "user": serializer.User(user)})
+}
+
+func (h *Handler) Logout(ctx *gin.Context) {
+	ctx.JSON(http.StatusOK, gin.H{"authenticated": 0})
+}
+
+func queryInt(ctx *gin.Context, name string, fallback int) (int, error) {
+	raw := strings.TrimSpace(ctx.Query(name))
+	if raw == "" {
+		return fallback, nil
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value < 0 {
+		return 0, model.ErrInvalidInput
+	}
+	return value, nil
 }
 
 func parseUint(raw string) (uint, error) {
-	value, err := strconv.ParseUint(raw, 10, 64)
+	value, err := strconv.ParseUint(strings.TrimSpace(raw), 10, 64)
 	if err != nil || value == 0 {
-		return 0, errors.New("invalid uint")
+		return 0, model.ErrInvalidInput
 	}
 	return uint(value), nil
 }
 
-func (h *Handler) withMediaFallback(launchVehicle model.LaunchVehicle) model.LaunchVehicle {
-	imageURL := h.resolveMedia(launchVehicle.ImageURL, defaultImageURL)
-	videoURL := h.resolveMedia(launchVehicle.VideoURL, defaultVideoURL)
-	launchVehicle.ImageURL = &imageURL
-	launchVehicle.VideoURL = &videoURL
-	return launchVehicle
+func decodeJSON(ctx *gin.Context, target any) error {
+	decoder := json.NewDecoder(io.LimitReader(ctx.Request.Body, 1<<20))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		return err
+	}
+	if decoder.Decode(&struct{}{}) != io.EOF {
+		return model.ErrInvalidInput
+	}
+	return nil
 }
 
-func (h *Handler) resolveMedia(rawURL *string, fallback string) string {
-	if rawURL == nil {
-		return fallback
+func handleError(ctx *gin.Context, err error) {
+	switch {
+	case errors.Is(err, model.ErrInvalidInput):
+		writeError(ctx, http.StatusBadRequest, "invalid input")
+	case errors.Is(err, model.ErrDraftExists):
+		writeError(ctx, http.StatusConflict, "draft already exists")
+	case errors.Is(err, model.ErrDraftNotFound):
+		writeError(ctx, http.StatusNotFound, "draft not found")
+	case errors.Is(err, model.ErrEmailExists):
+		writeError(ctx, http.StatusConflict, "email already exists")
+	case errors.Is(err, model.ErrNotFound):
+		writeError(ctx, http.StatusNotFound, "not found")
+	default:
+		writeError(ctx, http.StatusInternalServerError, err.Error())
 	}
+}
 
-	value := strings.TrimSpace(*rawURL)
+func writeError(ctx *gin.Context, status int, message string) {
+	ctx.JSON(status, gin.H{"error": message})
+}
 
-	if value == "" {
-		return fallback
+func generateObjectName(folder, prefix, extension string) string {
+	buffer := make([]byte, 6)
+	_, _ = rand.Read(buffer)
+	return fmt.Sprintf("%s/%s-%d-%s%s", folder, prefix, time.Now().UnixNano(), hex.EncodeToString(buffer), extension)
+}
+
+func normalizedExtension(name string, image bool) string {
+	extension := strings.ToLower(filepath.Ext(name))
+	if image {
+		switch extension {
+		case ".jpg", ".jpeg", ".png", ".webp":
+			return extension
+		}
+		return ""
 	}
+	switch extension {
+	case ".mp4", ".mov", ".webm":
+		return extension
+	}
+	return ""
+}
 
-	if strings.HasPrefix(value, "/static/") {
+func contentType(value, extension string) string {
+	value = strings.TrimSpace(value)
+	if value != "" && value != "application/octet-stream" {
 		return value
 	}
-
-	if !strings.HasPrefix(value, "http://") && !strings.HasPrefix(value, "https://") {
-		return fallback
+	if detected := mime.TypeByExtension(extension); detected != "" {
+		return detected
 	}
-
-	request, err := http.NewRequest(http.MethodHead, value, nil)
-	if err != nil {
-		return fallback
-	}
-
-	response, err := h.httpClient.Do(request)
-	if err != nil {
-		return fallback
-	}
-	defer response.Body.Close()
-
-	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusBadRequest {
-		return fallback
-	}
-
-	return value
+	return "application/octet-stream"
 }

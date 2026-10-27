@@ -1,29 +1,55 @@
 services:
   postgres:
-    image: postgres:16-alpine
-    container_name: orbit-lab2-postgres
+    image: postgres:16
+    container_name: orbit-lab3-postgres
     environment:
-      POSTGRES_DB: orbitlab
       POSTGRES_USER: orbit
       POSTGRES_PASSWORD: orbit12345
+      POSTGRES_DB: orbitlab
     ports:
       - "5433:5432"
     volumes:
-      - orbit-lab2-postgres-data:/var/lib/postgresql/data
+      - orbit_lab3_postgres:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U orbit -d orbitlab"]
-      interval: 5s
+      interval: 3s
       timeout: 3s
-      retries: 10
+      retries: 20
 
   adminer:
     image: adminer:latest
-    container_name: orbit-lab2-adminer
+    container_name: orbit-lab3-adminer
+    ports:
+      - "8081:8080"
     depends_on:
       postgres:
         condition: service_healthy
+
+  minio:
+    image: minio/minio:latest
+    container_name: orbit-lab3-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin123
     ports:
-      - "8081:8080"
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - orbit_lab3_minio:/data
+
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      - minio
+    entrypoint: >
+      /bin/sh -c "
+      until mc alias set local http://minio:9000 minioadmin minioadmin123; do sleep 1; done;
+      mc mb --ignore-existing local/service-media;
+      mc anonymous set download local/service-media;
+      exit 0;
+      "
 
 volumes:
-  orbit-lab2-postgres-data:
+  orbit_lab3_postgres:
+  orbit_lab3_minio:

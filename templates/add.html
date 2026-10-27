@@ -1,70 +1,12 @@
 <!doctype html>
 <html lang="ru">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Добавление — Launch Vehicle</title>
-  <link rel="stylesheet" href="/static/css/style.css">
-</head>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Добавить услугу</title><link rel="stylesheet" href="/resources/css/style.css"></head>
 <body>
-<main class="phone standard-page">
-  <header class="page-header">
-    <h1>ДОБАВЛЕНИЕ</h1>
-    {{ if .hasDraft }}<span class="badge">ЧЕРНОВИК</span>{{ end }}
-  </header>
-
-  {{ if .hasDraft }}
-  <form class="edit-form" method="post" action="/launch-vehicles/publish">
-    <input type="hidden" name="id" value="{{ .launchVehicle.ID }}">
-
-    <div class="draft-preview"><img src="{{ .launchVehicle.ImageURL }}" alt="{{ .launchVehicle.Name }}"></div>
-
-    <label>НАЗВАНИЕ LAUNCH VEHICLE
-      <input type="text" value="{{ .launchVehicle.Name }}" disabled>
-    </label>
-
-    <label>КРАТКАЯ ИНФОРМАЦИЯ
-      <textarea name="short_description" rows="5" required>{{ with .launchVehicle.ShortDescription }}{{ . }}{{ end }}</textarea>
-      <span class="hint">Обязательно перед публикацией.</span>
-    </label>
-
-    <label>ПОЛЕЗНАЯ НАГРУЗКА, КГ
-      <input name="payload_kg" type="number" min="0" value="{{ with .launchVehicle.PayloadKg }}{{ . }}{{ end }}" required>
-      <span class="hint">Обязательно перед публикацией.</span>
-    </label>
-
-    <label>ТЯГА НА УРОВНЕ МОРЯ, КН
-      <input name="sea_level_thrust_kn" type="number" min="0" value="{{ with .launchVehicle.SeaLevelThrustKN }}{{ . }}{{ end }}" required>
-      <span class="hint">Обязательно перед публикацией.</span>
-    </label>
-
-    <button class="primary-button" type="submit">ОПУБЛИКОВАТЬ</button>
-  </form>
-  {{ else }}
-  <form class="edit-form" method="post" action="/launch-vehicles/create">
-    <label>ИЗОБРАЖЕНИЕ
-      <input type="file" accept="image/*">
-      <span class="hint">Необязательно. В ЛР2 файл выбирается, но на сервер не отправляется.</span>
-    </label>
-
-    <label>ВИДЕО
-      <input type="file" accept="video/*">
-      <span class="hint">Необязательно. Для новой карточки используется медиа по умолчанию.</span>
-    </label>
-
-    <label>НАЗВАНИЕ LAUNCH VEHICLE
-      <input name="name" type="text" required>
-    </label>
-
-    <button class="primary-button" type="submit">ДАЛЕЕ</button>
-  </form>
-  {{ end }}
-
-  <nav class="bottom-nav">
-    <a class="nav-link" href="/feed"><span class="nav-icon">▤</span><span>Лента</span></a>
-    <a class="nav-link active" href="/add"><span class="nav-icon">⊞</span><span>Добавление</span></a>
-    <a class="nav-link" href="/launch-vehicles"><span class="nav-icon">▦</span><span>Плитка</span></a>
-  </nav>
-</main>
-</body>
-</html>
+<nav><a href="/">Лента</a><a href="/launch-vehicles">Услуги</a><a href="/add">Добавить</a></nav>
+<main><h1>Новая услуга</h1><form id="create"><label>Название<input name="name" maxlength="120" required></label><label>Изображение<input name="image" type="file" accept="image/*" required></label><label>Видео<input name="video" type="file" accept="video/*" required></label><button>Создать черновик</button></form><form id="publish"><label>Краткое описание<textarea name="short_description" maxlength="500" required></textarea></label><label>Полезная нагрузка, кг<input name="payload_kg" type="number" min="0" required></label><label>Тяга у земли, кН<input name="sea_level_thrust_kn" type="number" min="0" required></label><button>Опубликовать черновик</button></form><pre id="result" class="result"></pre></main>
+<script>
+const result=document.querySelector('#result');
+document.querySelector('#create').onsubmit=async event=>{event.preventDefault();const response=await fetch('/api/launch-vehicles',{method:'POST',body:new FormData(event.target)});result.textContent=JSON.stringify(await response.json(),null,2)};
+document.querySelector('#publish').onsubmit=async event=>{event.preventDefault();const data=Object.fromEntries(new FormData(event.target));data.payload_kg=Number(data.payload_kg);data.sea_level_thrust_kn=Number(data.sea_level_thrust_kn);const response=await fetch('/api/launch-vehicles/draft',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});result.textContent=JSON.stringify(await response.json(),null,2)};
+</script>
+</body></html>
