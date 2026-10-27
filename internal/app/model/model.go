@@ -3,15 +3,13 @@ package model
 import (
 	"errors"
 	"io"
-	"sync"
 	"time"
 )
 
 const (
-	StatusDraft                = "draft"
-	StatusPublished            = "published"
-	StatusDeleted              = "deleted"
-	CurrentCreatorIDValue uint = 1
+	StatusDraft     = "draft"
+	StatusPublished = "published"
+	StatusDeleted   = "deleted"
 )
 
 var (
@@ -20,16 +18,8 @@ var (
 	ErrDraftNotFound = errors.New("draft not found")
 	ErrInvalidInput  = errors.New("invalid input")
 	ErrEmailExists   = errors.New("email already exists")
-	currentCreatorID uint
-	creatorOnce      sync.Once
+	ErrUnauthorized  = errors.New("unauthorized")
 )
-
-func CurrentCreatorID() uint {
-	creatorOnce.Do(func() {
-		currentCreatorID = CurrentCreatorIDValue
-	})
-	return currentCreatorID
-}
 
 type User struct {
 	ID       uint   `gorm:"primaryKey"`

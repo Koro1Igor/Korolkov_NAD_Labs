@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"orbitlab/internal/app/auth"
 	"orbitlab/internal/app/model"
 	"orbitlab/internal/app/repository"
 	"orbitlab/internal/app/serializer"
@@ -32,10 +33,47 @@ const (
 type Handler struct {
 	repository *repository.Repository
 	storage    *repository.ObjectStorage
+	auth       *auth.Service
 }
 
-func NewHandler(repo *repository.Repository, storage *repository.ObjectStorage) *Handler {
-	return &Handler{repository: repo, storage: storage}
+func NewHandler(repo *repository.Repository, storage *repository.ObjectStorage, authService *auth.Service) *Handler {
+	return &Handler{repository: repo, storage: storage, auth: authService}
+}
+
+func (h *Handler) OptionalAuth(ctx *gin.Context) {
+	tokenString := bearerToken(ctx)
+	if tokenString == "" {
+		ctx.Set("user_id", uint(0))
+		ctx.Next()
+		return
+	}
+	claims, err := h.auth.Parse(ctx.Request.Context(), tokenString)
+	if err != nil {
+		ctx.Set("user_id", uint(0))
+		ctx.Next()
+		return
+	}
+	ctx.Set("user_id", claims.UserID)
+	ctx.Set("jwt", tokenString)
+	ctx.Next()
+}
+
+func (h *Handler) RequireAuth(ctx *gin.Context) {
+	tokenString := bearerToken(ctx)
+	if tokenString == "" {
+		writeError(ctx, http.StatusUnauthorized, "authorization required")
+		ctx.Abort()
+		return
+	}
+	claims, err := h.auth.Parse(ctx.Request.Context(), tokenString)
+	if err != nil {
+		writeError(ctx, http.StatusUnauthorized, "invalid or expired token")
+		ctx.Abort()
+		return
+	}
+	ctx.Set("user_id", claims.UserID)
+	ctx.Set("jwt", tokenString)
+	ctx.Next()
 }
 
 func (h *Handler) GetLaunchVehicles(ctx *gin.Context) {
@@ -49,7 +87,7 @@ func (h *Handler) GetLaunchVehicles(ctx *gin.Context) {
 		writeError(ctx, http.StatusBadRequest, "invalid payload_max")
 		return
 	}
-	userID := model.CurrentCreatorID()
+	userID := currentUserID(ctx)
 	items, err := h.repository.ListPublished(ctx.Request.Context(), minPayload, maxPayload)
 	if err != nil {
 		handleError(ctx, err)
@@ -85,17 +123,16 @@ func (h *Handler) GetFeed(ctx *gin.Context) {
 		writeError(ctx, http.StatusBadRequest, "id is required when next=true")
 		return
 	}
-	userID := model.CurrentCreatorID()
 	item, err := h.repository.Feed(ctx.Request.Context(), id, next)
 	if err != nil {
 		handleError(ctx, err)
 		return
 	}
-	ctx.JSON(http.StatusOK, serializer.FeedItem(item, userID, h.storage.Endpoint(), h.storage.Bucket()))
+	ctx.JSON(http.StatusOK, serializer.FeedItem(item, currentUserID(ctx), h.storage.Endpoint(), h.storage.Bucket()))
 }
 
 func (h *Handler) GetDraft(ctx *gin.Context) {
-	item, err := h.repository.DraftByCreator(ctx.Request.Context(), model.CurrentCreatorID())
+	item, err := h.repository.DraftByCreator(ctx.Request.Context(), currentUserID(ctx))
 	if err != nil {
 		handleError(ctx, err)
 		return
@@ -104,6 +141,7 @@ func (h *Handler) GetDraft(ctx *gin.Context) {
 }
 
 func (h *Handler) CreateLaunchVehicle(ctx *gin.Context) {
+	userID := currentUserID(ctx)
 	if err := ctx.Request.ParseMultipartForm(maxVideoSize + maxImageSize + 1<<20); err != nil {
 		writeError(ctx, http.StatusBadRequest, "invalid multipart form")
 		return
@@ -141,7 +179,7 @@ func (h *Handler) CreateLaunchVehicle(ctx *gin.Context) {
 		writeError(ctx, http.StatusBadRequest, "unsupported media extension")
 		return
 	}
-	if _, err := h.repository.DraftByCreator(ctx.Request.Context(), model.CurrentCreatorID()); err == nil {
+	if _, err := h.repository.DraftByCreator(ctx.Request.Context(), userID); err == nil {
 		handleError(ctx, model.ErrDraftExists)
 		return
 	} else if !errors.Is(err, model.ErrDraftNotFound) {
@@ -172,7 +210,7 @@ func (h *Handler) CreateLaunchVehicle(ctx *gin.Context) {
 		handleError(ctx, err)
 		return
 	}
-	item, err := h.repository.CreateDraft(requestContext, model.CurrentCreatorID(), name, imageName, videoName)
+	item, err := h.repository.CreateDraft(requestContext, userID, name, imageName, videoName)
 	if err != nil {
 		_ = h.storage.Delete(requestContext, imageName)
 		_ = h.storage.Delete(requestContext, videoName)
@@ -193,7 +231,7 @@ func (h *Handler) PublishDraft(ctx *gin.Context) {
 		writeError(ctx, http.StatusBadRequest, "invalid input")
 		return
 	}
-	item, err := h.repository.PublishDraft(ctx.Request.Context(), model.CurrentCreatorID(), input)
+	item, err := h.repository.PublishDraft(ctx.Request.Context(), currentUserID(ctx), input)
 	if err != nil {
 		handleError(ctx, err)
 		return
@@ -207,7 +245,7 @@ func (h *Handler) DeleteLaunchVehicle(ctx *gin.Context) {
 		writeError(ctx, http.StatusBadRequest, "invalid id")
 		return
 	}
-	if err := h.repository.SoftDeleteOwn(ctx.Request.Context(), model.CurrentCreatorID(), id); err != nil {
+	if err := h.repository.SoftDeleteOwn(ctx.Request.Context(), currentUserID(ctx), id); err != nil {
 		handleError(ctx, err)
 		return
 	}
@@ -225,7 +263,7 @@ func (h *Handler) SetLike(ctx *gin.Context) {
 		writeError(ctx, http.StatusBadRequest, "value must be 0 or 1")
 		return
 	}
-	result, err := h.repository.SetLike(ctx.Request.Context(), model.CurrentCreatorID(), id, input.Value)
+	result, err := h.repository.SetLike(ctx.Request.Context(), currentUserID(ctx), id, input.Value)
 	if err != nil {
 		handleError(ctx, err)
 		return
@@ -275,13 +313,43 @@ func (h *Handler) Login(ctx *gin.Context) {
 		handleError(ctx, err)
 		return
 	}
-	ctx.JSON(http.StatusOK, gin.H{"authenticated": 1, "user": serializer.User(user)})
+	token, expiresAt, err := h.auth.Issue(user.ID)
+	if err != nil {
+		handleError(ctx, err)
+		return
+	}
+	ctx.JSON(http.StatusOK, serializer.LoginResponse{AccessToken: token, TokenType: "Bearer", ExpiresAt: expiresAt, User: serializer.User(user)})
 }
 
 func (h *Handler) Logout(ctx *gin.Context) {
+	tokenString, _ := ctx.Get("jwt")
+	if tokenString == nil {
+		writeError(ctx, http.StatusUnauthorized, "authorization required")
+		return
+	}
+	if err := h.auth.Blacklist(ctx.Request.Context(), tokenString.(string)); err != nil {
+		handleError(ctx, err)
+		return
+	}
 	ctx.JSON(http.StatusOK, gin.H{"authenticated": 0})
 }
 
+func currentUserID(ctx *gin.Context) uint {
+	value, ok := ctx.Get("user_id")
+	if !ok {
+		return 0
+	}
+	id, _ := value.(uint)
+	return id
+}
+func bearerToken(ctx *gin.Context) string {
+	value := strings.TrimSpace(ctx.GetHeader("Authorization"))
+	const prefix = "Bearer "
+	if !strings.HasPrefix(value, prefix) {
+		return ""
+	}
+	return strings.TrimSpace(strings.TrimPrefix(value, prefix))
+}
 func queryInt(ctx *gin.Context, name string, fallback int) (int, error) {
 	raw := strings.TrimSpace(ctx.Query(name))
 	if raw == "" {
@@ -293,7 +361,6 @@ func queryInt(ctx *gin.Context, name string, fallback int) (int, error) {
 	}
 	return value, nil
 }
-
 func parseUint(raw string) (uint, error) {
 	value, err := strconv.ParseUint(strings.TrimSpace(raw), 10, 64)
 	if err != nil || value == 0 {
@@ -301,7 +368,6 @@ func parseUint(raw string) (uint, error) {
 	}
 	return uint(value), nil
 }
-
 func decodeJSON(ctx *gin.Context, target any) error {
 	decoder := json.NewDecoder(io.LimitReader(ctx.Request.Body, 1<<20))
 	decoder.DisallowUnknownFields()
@@ -313,11 +379,12 @@ func decodeJSON(ctx *gin.Context, target any) error {
 	}
 	return nil
 }
-
 func handleError(ctx *gin.Context, err error) {
 	switch {
 	case errors.Is(err, model.ErrInvalidInput):
 		writeError(ctx, http.StatusBadRequest, "invalid input")
+	case errors.Is(err, model.ErrUnauthorized):
+		writeError(ctx, http.StatusUnauthorized, "unauthorized")
 	case errors.Is(err, model.ErrDraftExists):
 		writeError(ctx, http.StatusConflict, "draft already exists")
 	case errors.Is(err, model.ErrDraftNotFound):
@@ -330,17 +397,14 @@ func handleError(ctx *gin.Context, err error) {
 		writeError(ctx, http.StatusInternalServerError, err.Error())
 	}
 }
-
 func writeError(ctx *gin.Context, status int, message string) {
 	ctx.JSON(status, gin.H{"error": message})
 }
-
 func generateObjectName(folder, prefix, extension string) string {
 	buffer := make([]byte, 6)
 	_, _ = rand.Read(buffer)
 	return fmt.Sprintf("%s/%s-%d-%s%s", folder, prefix, time.Now().UnixNano(), hex.EncodeToString(buffer), extension)
 }
-
 func normalizedExtension(name string, image bool) string {
 	extension := strings.ToLower(filepath.Ext(name))
 	if image {
@@ -356,7 +420,6 @@ func normalizedExtension(name string, image bool) string {
 	}
 	return ""
 }
-
 func contentType(value, extension string) string {
 	value = strings.TrimSpace(value)
 	if value != "" && value != "application/octet-stream" {

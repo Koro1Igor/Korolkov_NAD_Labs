@@ -1,0 +1,211 @@
+openapi: 3.0.3
+info:
+  title: OrbitLab API
+  version: "4.0"
+  description: ЛР4 — JWT, Redis blacklist и Swagger. Публично доступны список и лента; методы создателя требуют Bearer JWT.
+servers:
+  - url: http://localhost:8080
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    User:
+      type: object
+      properties:
+        id: {type: integer}
+        name: {type: string}
+        email: {type: string}
+    LoginInput:
+      type: object
+      required: [email, password]
+      properties:
+        email: {type: string, format: email}
+        password: {type: string}
+    RegisterInput:
+      type: object
+      required: [name, email, password]
+      properties:
+        name: {type: string}
+        email: {type: string, format: email}
+        password: {type: string}
+    PublishInput:
+      type: object
+      required: [short_description, payload_kg, sea_level_thrust_kn]
+      properties:
+        short_description: {type: string}
+        payload_kg: {type: integer, minimum: 0}
+        sea_level_thrust_kn: {type: integer, minimum: 0}
+    LikeInput:
+      type: object
+      required: [value]
+      properties:
+        value: {type: integer, enum: [0, 1]}
+    LaunchVehicle:
+      type: object
+      properties:
+        id: {type: integer}
+        name: {type: string}
+        short_description: {type: string, nullable: true}
+        status: {type: string, enum: [draft, published, deleted]}
+        image_name: {type: string, nullable: true}
+        video_name: {type: string, nullable: true}
+        image_url: {type: string, nullable: true}
+        video_url: {type: string, nullable: true}
+        payload_kg: {type: integer, nullable: true}
+        sea_level_thrust_kn: {type: integer, nullable: true}
+        created_at: {type: string, format: date-time}
+        formed_at: {type: string, format: date-time, nullable: true}
+        completed_at: {type: string, format: date-time, nullable: true}
+        creator_id: {type: integer}
+        moderator_id: {type: integer, nullable: true}
+        like_count: {type: integer}
+    LaunchVehicleListItem:
+      allOf:
+        - $ref: '#/components/schemas/LaunchVehicle'
+        - type: object
+          properties:
+            is_creator: {type: integer, enum: [0, 1]}
+    LaunchVehicleFeedItem:
+      allOf:
+        - $ref: '#/components/schemas/LaunchVehicle'
+        - type: object
+          properties:
+            liked: {type: integer, enum: [0, 1]}
+            is_creator: {type: integer, enum: [0, 1]}
+    LikeResponse:
+      type: object
+      properties:
+        id: {type: integer}
+        liked: {type: integer, enum: [0, 1]}
+        like_count: {type: integer}
+    LoginResponse:
+      type: object
+      properties:
+        access_token: {type: string}
+        token_type: {type: string, example: Bearer}
+        expires_at: {type: string, format: date-time}
+        user: {$ref: '#/components/schemas/User'}
+paths:
+  /api/launch-vehicles:
+    get:
+      summary: Список опубликованных услуг
+      parameters:
+        - {name: payload_min, in: query, schema: {type: integer, minimum: 0}}
+        - {name: payload_max, in: query, schema: {type: integer, minimum: 0}}
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: {$ref: '#/components/schemas/LaunchVehicleListItem'}
+    post:
+      summary: Создать черновик с изображением и видео
+      security: [{BearerAuth: []}]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [name, image, video]
+              properties:
+                name: {type: string}
+                image: {type: string, format: binary}
+                video: {type: string, format: binary}
+      responses:
+        '201': {description: Created}
+        '401': {description: Unauthorized}
+  /api/feed:
+    get:
+      summary: Лента опубликованных услуг
+      parameters:
+        - {name: id, in: query, schema: {type: integer}}
+        - {name: next, in: query, schema: {type: boolean}}
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/LaunchVehicleFeedItem'}
+  /api/launch-vehicles/draft:
+    get:
+      summary: Черновик текущего пользователя
+      security: [{BearerAuth: []}]
+      responses:
+        '200': {description: OK}
+        '401': {description: Unauthorized}
+    put:
+      summary: Опубликовать черновик
+      security: [{BearerAuth: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/PublishInput'}
+      responses:
+        '200': {description: Published}
+        '401': {description: Unauthorized}
+  /api/launch-vehicles/{id}:
+    delete:
+      summary: Soft delete своей услуги
+      security: [{BearerAuth: []}]
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: integer}}
+      responses:
+        '204': {description: Deleted}
+        '401': {description: Unauthorized}
+        '404': {description: Not found}
+  /api/launch-vehicles/{id}/like:
+    post:
+      summary: Поставить или снять лайк
+      security: [{BearerAuth: []}]
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: integer}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/LikeInput'}
+      responses:
+        '200': {description: OK}
+        '401': {description: Unauthorized}
+  /api/users:
+    post:
+      summary: Регистрация
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/RegisterInput'}
+      responses:
+        '201': {description: Created}
+  /api/users/login:
+    post:
+      summary: Аутентификация и получение JWT
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/LoginInput'}
+      responses:
+        '200':
+          description: JWT
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/LoginResponse'}
+        '401': {description: Unauthorized}
+  /api/users/logout:
+    post:
+      summary: Деавторизация и добавление JWT в Redis blacklist
+      security: [{BearerAuth: []}]
+      responses:
+        '200': {description: Logged out}
+        '401': {description: Unauthorized}

@@ -18,13 +18,12 @@ import (
 
 	"orbitlab/internal/app/model"
 
+	"golang.org/x/crypto/bcrypt"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
 
-type Repository struct {
-	db *gorm.DB
-}
+type Repository struct{ db *gorm.DB }
 
 type ObjectStorage struct {
 	endpoint  string
@@ -36,14 +35,7 @@ type ObjectStorage struct {
 }
 
 func NewRepository() (*Repository, error) {
-	dsn := fmt.Sprintf(
-		"host=%s user=%s password=%s dbname=%s port=%s sslmode=disable TimeZone=Europe/Moscow",
-		env("PGHOST", "localhost"),
-		env("PGUSER", "orbit"),
-		env("PGPASSWORD", "orbit12345"),
-		env("PGDATABASE", "orbitlab"),
-		env("PGPORT", "5433"),
-	)
+	dsn := fmt.Sprintf("host=%s user=%s password=%s dbname=%s port=%s sslmode=disable TimeZone=Europe/Moscow", env("PGHOST", "localhost"), env("PGUSER", "orbit"), env("PGPASSWORD", "orbit12345"), env("PGDATABASE", "orbitlab"), env("PGPORT", "5433"))
 	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
 	if err != nil {
 		return nil, fmt.Errorf("postgres connection: %w", err)
@@ -77,14 +69,7 @@ func NewRepository() (*Repository, error) {
 }
 
 func NewObjectStorage() *ObjectStorage {
-	return &ObjectStorage{
-		endpoint:  env("MINIO_ENDPOINT", "http://localhost:9000"),
-		accessKey: env("MINIO_ACCESS_KEY", "minioadmin"),
-		secretKey: env("MINIO_SECRET_KEY", "minioadmin123"),
-		bucket:    env("MINIO_BUCKET", "service-media"),
-		region:    env("MINIO_REGION", "us-east-1"),
-		client:    &http.Client{Timeout: 60 * time.Second},
-	}
+	return &ObjectStorage{endpoint: env("MINIO_ENDPOINT", "http://localhost:9000"), accessKey: env("MINIO_ACCESS_KEY", "minioadmin"), secretKey: env("MINIO_SECRET_KEY", "minioadmin123"), bucket: env("MINIO_BUCKET", "service-media"), region: env("MINIO_REGION", "us-east-1"), client: &http.Client{Timeout: 60 * time.Second}}
 }
 
 func (r *Repository) ListPublished(ctx context.Context, minPayload, maxPayload int) ([]model.LaunchVehicle, error) {
@@ -140,13 +125,7 @@ func (r *Repository) PublishDraft(ctx context.Context, creatorID uint, input mod
 	if err != nil {
 		return item, err
 	}
-	result := r.db.WithContext(ctx).Model(&model.LaunchVehicle{}).Where("id = ? AND creator_id = ? AND status = ?", item.ID, creatorID, model.StatusDraft).Updates(map[string]any{
-		"short_description":   input.ShortDescription,
-		"payload_kg":          input.PayloadKg,
-		"sea_level_thrust_kn": input.SeaLevelThrustKN,
-		"status":              model.StatusPublished,
-		"formed_at":           time.Now(),
-	})
+	result := r.db.WithContext(ctx).Model(&model.LaunchVehicle{}).Where("id = ? AND creator_id = ? AND status = ?", item.ID, creatorID, model.StatusDraft).Updates(map[string]any{"short_description": input.ShortDescription, "payload_kg": input.PayloadKg, "sea_level_thrust_kn": input.SeaLevelThrustKN, "status": model.StatusPublished, "formed_at": time.Now()})
 	if result.Error != nil {
 		return model.LaunchVehicle{}, result.Error
 	}
@@ -201,7 +180,11 @@ func (r *Repository) CreateUser(ctx context.Context, input model.RegisterUserInp
 	if count > 0 {
 		return model.User{}, model.ErrEmailExists
 	}
-	user := model.User{Name: input.Name, Email: input.Email, Password: input.Password}
+	hash, err := bcrypt.GenerateFromPassword([]byte(input.Password), bcrypt.DefaultCost)
+	if err != nil {
+		return model.User{}, err
+	}
+	user := model.User{Name: input.Name, Email: input.Email, Password: string(hash)}
 	if err := r.db.WithContext(ctx).Create(&user).Error; err != nil {
 		return model.User{}, err
 	}
@@ -210,8 +193,24 @@ func (r *Repository) CreateUser(ctx context.Context, input model.RegisterUserInp
 
 func (r *Repository) Authenticate(ctx context.Context, email, password string) (model.User, error) {
 	var user model.User
-	err := r.db.WithContext(ctx).Where("email = ? AND password = ?", email, password).First(&user).Error
-	return user, normalizeNotFound(err)
+	if err := r.db.WithContext(ctx).Where("email = ?", email).First(&user).Error; err != nil {
+		return user, normalizeNotFound(err)
+	}
+	if strings.HasPrefix(user.Password, "$2a$") || strings.HasPrefix(user.Password, "$2b$") || strings.HasPrefix(user.Password, "$2y$") {
+		if bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(password)) != nil {
+			return model.User{}, model.ErrUnauthorized
+		}
+		return user, nil
+	}
+	if user.Password != password {
+		return model.User{}, model.ErrUnauthorized
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err == nil {
+		_ = r.db.WithContext(ctx).Model(&model.User{}).Where("id = ?", user.ID).Update("password", string(hash)).Error
+		user.Password = string(hash)
+	}
+	return user, nil
 }
 
 func (s *ObjectStorage) Upload(ctx context.Context, objectName, contentType string, reader io.Reader, size int64) error {
@@ -227,14 +226,11 @@ func (s *ObjectStorage) Upload(ctx context.Context, objectName, contentType stri
 	}
 	return s.do(ctx, http.MethodPut, objectName, contentType, data)
 }
-
 func (s *ObjectStorage) Delete(ctx context.Context, objectName string) error {
 	return s.do(ctx, http.MethodDelete, objectName, "", nil)
 }
-
 func (s *ObjectStorage) Endpoint() string { return s.endpoint }
-
-func (s *ObjectStorage) Bucket() string { return s.bucket }
+func (s *ObjectStorage) Bucket() string   { return s.bucket }
 
 func (s *ObjectStorage) do(ctx context.Context, method, objectName, contentType string, payload []byte) error {
 	now := time.Now().UTC()
@@ -295,14 +291,12 @@ func normalizeNotFound(err error) error {
 	}
 	return err
 }
-
 func env(key, fallback string) string {
 	if value := strings.TrimSpace(os.Getenv(key)); value != "" {
 		return value
 	}
 	return fallback
 }
-
 func escapeObjectPath(value string) string {
 	parts := strings.Split(strings.TrimLeft(value, "/"), "/")
 	for i := range parts {
@@ -310,12 +304,7 @@ func escapeObjectPath(value string) string {
 	}
 	return strings.Join(parts, "/")
 }
-
-func sha256Hex(data []byte) string {
-	sum := sha256.Sum256(data)
-	return hex.EncodeToString(sum[:])
-}
-
+func sha256Hex(data []byte) string { sum := sha256.Sum256(data); return hex.EncodeToString(sum[:]) }
 func hmacSHA256(key []byte, value string) []byte {
 	mac := hmac.New(sha256.New, key)
 	_, _ = mac.Write([]byte(value))
